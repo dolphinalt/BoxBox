@@ -7,7 +7,7 @@ class Race:
         self.session = fastf1.get_session(year, rnd, session)
         self.session.load(telemetry=True, laps=True)
 
-    def get_timing_tower(self, race_time, detail = "leader"):
+    def get_timing_tower(self, race_time, detail="leader"):
         race_start = self._get_race_start_time()
         session_time = timedelta(seconds=race_start + race_time)
 
@@ -56,6 +56,9 @@ class Race:
         lap_number = current_lap["LapNumber"]
         total_distance = (lap_number - 1) * track_length + point["Distance"]
 
+        compound = current_lap["Compound"]
+        tire_life = current_lap["TyreLife"]
+
         return {
             "driver": driver,
             "driver_abbr": current_lap["Driver"],
@@ -63,6 +66,8 @@ class Race:
             "distance": point["Distance"],
             "total_distance": total_distance,
             "cumulative_time": cumulative_time,
+            "compound": compound,
+            "tyre_life": tire_life,
         }
 
     def _get_current_lap_info(self, completed_before, in_progress):
@@ -111,8 +116,13 @@ class Race:
                     delta = "Gap"
                 else:
                     delta = self._calculate_delta(
-                        timing_data[i], timing_data[i-1], track_length, leader_avg_speed
+                        timing_data[i],
+                        timing_data[i - 1],
+                        track_length,
+                        leader_avg_speed,
                     )
+            elif detail == "tires":
+                delta = self._get_tires(driver)
             else:
                 delta = "ERR"
 
@@ -129,6 +139,18 @@ class Race:
 
         time_gap = distance_gap / leader_avg_speed if leader_avg_speed > 0 else 0
         return f"+{abs(time_gap):.3f}s"
+
+    def _get_tires(self, driver):
+        compounds = {
+            "SOFT": "S",
+            "MEDIUM": "M",
+            "HARD": "H",
+            "INTERMEDIATE": "I",
+            "WET": "W",
+        }
+        compound = compounds.get(driver["compound"], "?")
+        life = int(driver["tyre_life"]) if driver["tyre_life"] else 0
+        return f"{compound}{life}"
 
     def _get_track_length(self):
         completed_lap = self.session.laps[self.session.laps["LapTime"].notna()].iloc[0]
@@ -147,4 +169,4 @@ class Race:
 
 race = Race(2025, 24, "R")
 
-print(race.get_timing_tower(60, 'gap'))
+print(race.get_timing_tower(60, "tires"))
