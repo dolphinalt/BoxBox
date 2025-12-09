@@ -18,7 +18,7 @@ class Race:
         return self._format_timing_tower(timing_data, detail)
 
     def get_driver_telemetry(self, driver):
-        data = self._get_driver_data(driver)
+        data = self._get_driver_telemetry(driver)
         if data is not None:
             data["speed"] = float(data["speed"])
             data["rpm"] = int(data["rpm"])
@@ -31,6 +31,9 @@ class Race:
                 data["drs"] = False
         return data
 
+    def get_driver_positions(self):
+        return self._get_driver_positionings()
+
     def tick(self, amount=1):
         self.time += amount
 
@@ -39,13 +42,13 @@ class Race:
         track_length = self._get_track_length()
 
         for driver in self.session.drivers:
-            driver_data = self._get_driver_position(driver, track_length)
+            driver_data = self._get_driver_info(driver, track_length)
             if driver_data:
                 timing_data.append(driver_data)
 
         return timing_data
 
-    def _get_driver_position(self, driver, track_length):
+    def _get_driver_info(self, driver, track_length):
         session_time = self.race_start_time + timedelta(seconds=self.time)
         driver_laps = self.session.laps.pick_drivers(driver)
         completed_before = driver_laps[driver_laps["Time"] <= session_time]
@@ -84,7 +87,7 @@ class Race:
             "tyre_life": current_lap["TyreLife"],
         }
 
-    def _get_driver_data(self, driver):
+    def _get_driver_telemetry(self, driver):
         session_time = self.race_start_time + timedelta(seconds=self.time)
         driver_laps = self.session.laps.pick_drivers(driver)
         completed_before = driver_laps[driver_laps["Time"] <= session_time]
@@ -117,6 +120,42 @@ class Race:
             "drs": point["DRS"],
         }
 
+    def _get_driver_positionings(self):
+        session_time = self.race_start_time + timedelta(seconds=self.time)
+        positions = []
+
+        for driver in self.session.drivers:
+            driver_laps = self.session.laps.pick_drivers(driver)
+            completed_before = driver_laps[driver_laps["Time"] <= session_time]
+            in_progress = driver_laps[
+                (driver_laps["LapStartTime"] <= session_time)
+                & ((driver_laps["Time"] > session_time) | driver_laps["Time"].isna())
+            ]
+
+            current_lap, is_complete = self._get_current_lap_info(
+                completed_before, in_progress
+            )
+            if current_lap is None:
+                continue
+
+            telemetry = current_lap.get_telemetry()
+            telemetry = telemetry[telemetry["SessionTime"] <= session_time]
+            if telemetry.empty:
+                continue
+
+            point = telemetry.iloc[-1]
+
+            positions.append(
+                {
+                    "driver": driver,
+                    "driver_abbr": current_lap["Driver"],
+                    "x": float(point["X"]),
+                    "y": float(point["Y"]),
+                }
+            )
+
+        return positions
+
     def _get_current_lap_info(self, completed_before, in_progress):
         if in_progress.empty:
             if completed_before.empty:
@@ -148,7 +187,11 @@ class Race:
             else 1
         )
 
-        timing_tower = {"lap": int(leader["lap"]), "positions": []}
+        timing_tower = {
+            "lap": int(leader["lap"]),
+            "status": self._get_track_status(),
+            "positions": [],
+        }
 
         for i, driver in enumerate(timing_data):
             if detail == "leader":
@@ -214,6 +257,28 @@ class Race:
         laps = self.session.laps
         return laps.pick_laps(lap)
 
+    def _get_track_status(self):
+        session_time = self.race_start_time + timedelta(seconds=self.time)
+        track_status = self.session.track_status
+
+        status_before = track_status[track_status["Time"] <= session_time]
+
+        if status_before.empty:
+            return "Unknown"
+
+        current_status = status_before.iloc[-1]["Status"]
+
+        status_map = {
+            "1": "Green",
+            "2": "Yellow",
+            "4": "SC",
+            "5": "Red",
+            "6": "VSC",
+            "7": "VSC Ending",
+        }
+
+        return status_map.get(str(current_status), f"Unknown ({current_status})")
+
 
 race = Race(2025, 24, "R")
 
@@ -221,3 +286,4 @@ race.tick(145)
 
 print(race.get_timing_tower("gap"))
 print("DEBUG", race.get_driver_telemetry("LEC"))
+print("DEBUG", race.get_driver_positions())
