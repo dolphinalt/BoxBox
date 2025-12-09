@@ -7,7 +7,7 @@ class Race:
         self.session = fastf1.get_session(year, rnd, session)
         self.session.load(telemetry=True, laps=True)
         self.race_start_time = self._get_race_start_time()
-        self.time = 0  # seconds from race start
+        self.time = 0
 
     def get_timing_tower(self, detail="leader"):
         timing_data = self._collect_timing_data()
@@ -17,13 +17,19 @@ class Race:
         timing_data.sort(key=lambda x: x["total_distance"], reverse=True)
         return self._format_timing_tower(timing_data, detail)
 
-    # def get_driver_telemetry(self, driver):
-    #     timing_data = self._collect_timing_data()
-    #     if not timing_data:
-    #         return []
-
-    #     timing_data.sort(key=lambda x: x["total_distance"], reverse=True)
-    #     return self._format_timing_tower(timing_data, driver)
+    def get_driver_telemetry(self, driver):
+        data = self._get_driver_data(driver)
+        if data is not None:
+            data["speed"] = float(data["speed"])
+            data["rpm"] = int(data["rpm"])
+            data["gear"] = int(data["gear"])
+            data["throttle"] = float(data["throttle"])
+            data["brake"] = bool(data["brake"])
+            if data["drs"] in [10, 12, 14]:
+                data["drs"] = True
+            else:
+                data["drs"] = False
+        return data
 
     def tick(self, amount=1):
         self.time += amount
@@ -33,13 +39,13 @@ class Race:
         track_length = self._get_track_length()
 
         for driver in self.session.drivers:
-            driver_data = self._get_driver_data(driver, track_length)
+            driver_data = self._get_driver_position(driver, track_length)
             if driver_data:
                 timing_data.append(driver_data)
 
         return timing_data
 
-    def _get_driver_data(self, driver, track_length):
+    def _get_driver_position(self, driver, track_length):
         session_time = self.race_start_time + timedelta(seconds=self.time)
         driver_laps = self.session.laps.pick_drivers(driver)
         completed_before = driver_laps[driver_laps["Time"] <= session_time]
@@ -54,10 +60,6 @@ class Race:
         if current_lap is None:
             return None
 
-        cumulative_time = self._calculate_cumulative_time(
-            completed_before, current_lap, is_complete
-        )
-
         car_data = current_lap.get_telemetry()
         car_data = car_data[car_data["SessionTime"] <= session_time]
         if car_data.empty:
@@ -65,10 +67,11 @@ class Race:
 
         point = car_data.iloc[-1]
         lap_number = current_lap["LapNumber"]
-        total_distance = (lap_number - 1) * track_length + point["Distance"]
 
-        compound = current_lap["Compound"]
-        tire_life = current_lap["TyreLife"]
+        cumulative_time = self._calculate_cumulative_time(
+            completed_before, current_lap, is_complete
+        )
+        total_distance = (lap_number - 1) * track_length + point["Distance"]
 
         return {
             "driver": driver,
@@ -77,8 +80,41 @@ class Race:
             "distance": point["Distance"],
             "total_distance": total_distance,
             "cumulative_time": cumulative_time,
-            "compound": compound,
-            "tyre_life": tire_life,
+            "compound": current_lap["Compound"],
+            "tyre_life": current_lap["TyreLife"],
+        }
+
+    def _get_driver_data(self, driver):
+        session_time = self.race_start_time + timedelta(seconds=self.time)
+        driver_laps = self.session.laps.pick_drivers(driver)
+        completed_before = driver_laps[driver_laps["Time"] <= session_time]
+        in_progress = driver_laps[
+            (driver_laps["LapStartTime"] <= session_time)
+            & ((driver_laps["Time"] > session_time) | driver_laps["Time"].isna())
+        ]
+
+        current_lap, is_complete = self._get_current_lap_info(
+            completed_before, in_progress
+        )
+        if current_lap is None:
+            return None
+
+        car_data = current_lap.get_car_data()
+        car_data = car_data[car_data["SessionTime"] <= session_time]
+        if car_data.empty:
+            return None
+
+        point = car_data.iloc[-1]
+
+        return {
+            "driver": driver,
+            "driver_abbr": current_lap["Driver"],
+            "speed": point["Speed"],
+            "rpm": point["RPM"],
+            "gear": point["nGear"],
+            "throttle": point["Throttle"],
+            "brake": point["Brake"],
+            "drs": point["DRS"],
         }
 
     def _get_current_lap_info(self, completed_before, in_progress):
@@ -104,7 +140,6 @@ class Race:
         return cumulative_time
 
     def _format_timing_tower(self, timing_data, detail):
-        timing_tower = []
         track_length = self._get_track_length()
         leader = timing_data[0]
         leader_avg_speed = (
@@ -113,7 +148,7 @@ class Race:
             else 1
         )
 
-        timing_tower.append(f"Lap {int(leader['lap'])}")
+        timing_tower = {"lap": int(leader["lap"]), "positions": []}
 
         for i, driver in enumerate(timing_data):
             if detail == "leader":
@@ -138,7 +173,9 @@ class Race:
             else:
                 delta = "ERR"
 
-            timing_tower.append(f"{i + 1}. {driver['driver_abbr']} {delta}")
+            timing_tower["positions"].append(
+                {"position": i + 1, "driver": driver["driver_abbr"], "detail": delta}
+            )
 
         return timing_tower
 
@@ -180,11 +217,7 @@ class Race:
 
 race = Race(2025, 24, "R")
 
+race.tick(145)
+
 print(race.get_timing_tower("gap"))
-
-for i in range(10, 120, 10):
-    race.tick(10)
-    print(race.get_timing_tower("gap"))
-
-
-print("DEBUG", race.get_timing_tower("gap"))
+print("DEBUG", race.get_driver_telemetry("LEC"))
