@@ -110,7 +110,7 @@ class Race:
         point = car_data.iloc[-1]
 
         return {
-            "driver": driver,
+            "driver": int(current_lap["DriverNumber"]),
             "driver_abbr": current_lap["Driver"],
             "speed": point["Speed"],
             "rpm": point["RPM"],
@@ -278,6 +278,3 @@ class Race:
         }
 
         return status_map.get(str(current_status), f"Unknown ({current_status})")
-
-
-race = Race(2025, 24, "R")
