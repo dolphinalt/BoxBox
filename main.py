@@ -1,7 +1,6 @@
 import model
 import os
 import sys
-import time
 
 
 def process_timing_tower(data):
@@ -10,7 +9,7 @@ def process_timing_tower(data):
     ret.append(f"┃ LAP {data['lap']}{' ' * (20 - len(str(data['lap'])) - 5)}┃")
     ret.append("┠────────────────────┨")
     if data["status"] != "Green":
-        ret.append(f"{data['status']}")
+        ret.append(f"┃ {data['status']}{' ' * (19 - len(data['status']))}┃")
         ret.append("┠────────────────────┨")
     for key in data["positions"]:
         data_string = f"{key['driver']}    {key['detail']}"
@@ -22,6 +21,12 @@ def process_timing_tower(data):
 def process_driver_telemetry(data):
     ret = []
     ret.append("┏━━━━┯━━━━━━━━━━━━━┓")
+
+    if data is None:
+        ret.append("┃ NO DATA        ┃")
+        ret.append("┗━━━━━━━━━━━━━━━━━━┛")
+        return ret
+
     if data["drs"]:
         drs_string = "[DRS]"
     else:
@@ -58,16 +63,14 @@ def _clear_screen():
     if os.name == "nt":
         os.system("cls")
     else:
-        # Move cursor to home and clear screen
         sys.stdout.write("\033[2J\033[H")
         sys.stdout.flush()
 
 
 race = model.Race(2025, 24, "R")
-for i in range(0, 120 * 60):
+for i in range(0, 72000):
     race.tick()
     print_gui(
         process_timing_tower(race.get_timing_tower("gap")),
         process_driver_telemetry(race.get_driver_telemetry("LEC")),
     )
-    time.sleep(1)

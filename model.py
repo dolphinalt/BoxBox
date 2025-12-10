@@ -1,5 +1,8 @@
 import fastf1
 from datetime import timedelta
+import pickle
+import os
+import hashlib
 
 
 class Race:
@@ -8,16 +11,31 @@ class Race:
         self.session.load(telemetry=True, laps=True)
         self.race_start_time = self._get_race_start_time()
         self.time = 0
+        self._telemetry_cache = {}
+        self._car_data_cache = {}
+
+        self.cache_dir = ".cache"
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        cache_key = f"{year}_{rnd}_{session}"
+        self.cache_file = os.path.join(self.cache_dir, f"telemetry_{cache_key}.pkl")
+
+        self._load_or_preload_telemetry()
 
     def get_timing_tower(self, detail="leader"):
         timing_data = self._collect_timing_data()
         if not timing_data:
-            return []
+            return {"lap": 0, "status": "Unknown", "positions": []}
 
         timing_data.sort(key=lambda x: x["total_distance"], reverse=True)
         return self._format_timing_tower(timing_data, detail)
 
     def get_driver_telemetry(self, driver):
+        # Convert driver abbreviation to number if needed
+        driver = self._resolve_driver(driver)
+        if driver is None:
+            return None
+
         data = self._get_driver_telemetry(driver)
         if data is not None:
             data["speed"] = float(data["speed"])
@@ -34,7 +52,7 @@ class Race:
     def get_driver_positions(self):
         return self._get_driver_positionings()
 
-    def tick(self, amount=1):
+    def tick(self, amount=0.1):
         self.time += amount
 
     def _collect_timing_data(self):
@@ -63,7 +81,9 @@ class Race:
         if current_lap is None:
             return None
 
-        car_data = current_lap.get_telemetry()
+        car_data = self._get_cached_telemetry(current_lap)
+        if car_data is None:
+            return None
         car_data = car_data[car_data["SessionTime"] <= session_time]
         if car_data.empty:
             return None
@@ -102,7 +122,9 @@ class Race:
         if current_lap is None:
             return None
 
-        car_data = current_lap.get_car_data()
+        car_data = self._get_cached_car_data(current_lap)
+        if car_data is None:
+            return None
         car_data = car_data[car_data["SessionTime"] <= session_time]
         if car_data.empty:
             return None
@@ -138,7 +160,9 @@ class Race:
             if current_lap is None:
                 continue
 
-            telemetry = current_lap.get_telemetry()
+            telemetry = self._get_cached_telemetry(current_lap)
+            if telemetry is None:
+                continue
             telemetry = telemetry[telemetry["SessionTime"] <= session_time]
             if telemetry.empty:
                 continue
@@ -278,3 +302,73 @@ class Race:
         }
 
         return status_map.get(str(current_status), f"Unknown ({current_status})")
+
+    def _load_or_preload_telemetry(self):
+        if os.path.exists(self.cache_file):
+            print(f"Loading cached telemetry from {self.cache_file}...")
+            try:
+                with open(self.cache_file, "rb") as f:
+                    cache_data = pickle.load(f)
+                    self._telemetry_cache = cache_data["telemetry"]
+                    self._car_data_cache = cache_data["car_data"]
+                print(
+                    f"Loaded {len(self._telemetry_cache)} telemetry entries and {len(self._car_data_cache)} car data entries from cache"
+                )
+                return
+            except Exception as e:
+                print(f"Error loading cache: {e}. Regenerating...")
+
+        self._preload_telemetry()
+        self._save_telemetry_cache()
+
+    def _preload_telemetry(self):
+        print("Preloading telemetry data for fast access...")
+        for driver in self.session.drivers:
+            driver_laps = self.session.laps.pick_drivers(driver)
+            for idx in driver_laps.index:
+                lap = driver_laps.loc[idx]
+                lap_key = (lap["Driver"], lap["LapNumber"])
+                try:
+                    telemetry = lap.get_telemetry()
+                    if not telemetry.empty:
+                        self._telemetry_cache[lap_key] = telemetry
+                except Exception:
+                    pass
+                try:
+                    car_data = lap.get_car_data()
+                    if not car_data.empty:
+                        self._car_data_cache[lap_key] = car_data
+                except Exception:
+                    pass
+        print(f"Preloaded telemetry for {len(self._telemetry_cache)} laps")
+
+    def _save_telemetry_cache(self):
+        print(f"Saving telemetry cache to {self.cache_file}...")
+        try:
+            cache_data = {
+                "telemetry": self._telemetry_cache,
+                "car_data": self._car_data_cache,
+            }
+            with open(self.cache_file, "wb") as f:
+                pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print("Cache saved successfully")
+        except Exception as e:
+            print(f"Error saving cache: {e}")
+
+    def _get_cached_telemetry(self, current_lap):
+        lap_key = (current_lap["Driver"], current_lap["LapNumber"])
+        return self._telemetry_cache.get(lap_key)
+
+    def _get_cached_car_data(self, current_lap):
+        lap_key = (current_lap["Driver"], current_lap["LapNumber"])
+        return self._car_data_cache.get(lap_key)
+
+    def _resolve_driver(self, driver):
+        if str(driver) in self.session.drivers:
+            return str(driver)
+
+        driver_laps = self.session.laps[self.session.laps["Driver"] == driver]
+        if not driver_laps.empty:
+            return str(driver_laps.iloc[0]["DriverNumber"])
+
+        return None
